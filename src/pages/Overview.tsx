@@ -1,168 +1,152 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { BarChart3, BookOpen, ChevronRight, GraduationCap, Library, Megaphone, NotebookPen, Users, type LucideIcon } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { Card, Badge, StatusLight } from "../components/ui";
-import { getDb } from "../utils/db";
+import { getDb, useDbVersion } from "../utils/db";
+import { supabase } from "../lib/supabase";
 import { getPerformanceColor, JUNIOR_SUBJECTS, SENIOR_SUBJECTS } from "../data/constants";
 
-export default function Overview() {
+interface SchoolStats { pupils: number; teachers: number; hods: number; publishedResults: number; schoolAvg: number }
+
+const STAT_TONES = {
+  emerald: "bg-emerald-100 text-emerald-700",
+  blue: "bg-blue-100 text-blue-700",
+  amber: "bg-amber-100 text-amber-700",
+  purple: "bg-purple-100 text-purple-700",
+};
+
+function StatCard({ label, value, icon: Icon, tone }: { label: string; value: string | number; icon: LucideIcon; tone: keyof typeof STAT_TONES }) {
+  return (
+    <Card className="flex items-center gap-4">
+      <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${STAT_TONES[tone]}`}>
+        <Icon className="w-6 h-6" aria-hidden />
+      </div>
+      <div className="min-w-0">
+        <div className="text-2xl font-bold text-gray-900 tabular-nums">{value}</div>
+        <div className="text-xs text-gray-500 uppercase tracking-wide truncate">{label}</div>
+      </div>
+    </Card>
+  );
+}
+
+function SectionTitle({ icon: Icon, children, onMore }: { icon: LucideIcon; children: React.ReactNode; onMore?: () => void }) {
+  return (
+    <div className="flex items-center justify-between mb-3">
+      <h3 className="font-semibold text-gray-900 flex items-center gap-2"><Icon className="w-4 h-4 text-emerald-700" />{children}</h3>
+      {onMore && <button onClick={onMore} className="text-xs font-medium text-emerald-700 hover:text-emerald-900 inline-flex items-center">View all<ChevronRight className="w-3.5 h-3.5" /></button>}
+    </div>
+  );
+}
+
+export default function Overview({ onNavigate }: { onNavigate?: (tab: string) => void }) {
   const { user } = useAuth();
-  if (!user) return null;
-  const db = getDb();
+  const version = useDbVersion();
+  const [school, setSchool] = useState<SchoolStats | null>(null);
+
+  useEffect(() => {
+    supabase.rpc("get_school_stats").then(({ data }) => { if (data) setSchool(data as SchoolStats); });
+  }, [version]);
 
   const stats = useMemo(() => {
-    const pupils = db.users.filter((u) => u.role === "pupil");
-    const teachers = db.users.filter((u) => u.role === "teacher" || u.role === "hod");
-    const hods = db.users.filter((u) => u.role === "hod");
-    const publishedResults = db.results.filter((r) => r.published);
-
-    // school overall average from published results
-    let totalSum = 0;
-    let totalCount = 0;
-    publishedResults.forEach((r) => {
-      r.scores.forEach((s) => {
-        totalSum += s.score;
-        totalCount++;
-      });
-    });
-    const schoolAvg = totalCount > 0 ? totalSum / totalCount : 0;
-    const schoolStatus = schoolAvg === 0 ? "gray" : getPerformanceColor(schoolAvg);
-
-    // personal average for pupils
-    let pupilAvg = 0;
-    if (user.role === "pupil") {
-      const myResults = publishedResults.filter((r) => r.pupilId === user.id);
-      const myScores = myResults.flatMap((r) => r.scores.map((s) => s.score));
-      pupilAvg = myScores.length > 0 ? myScores.reduce((a, b) => a + b, 0) / myScores.length : 0;
-    }
-
-    // classes for teacher
-    const myClasses = (user.role === "teacher" || user.role === "hod") ? user.classes || [] : [];
-    const mySubjects = (user.role === "teacher" || user.role === "hod") ? user.subjects || [] : [];
-
+    const db = getDb();
+    if (!user) return null;
+    const myPublished = db.results.filter((r) => r.pupilId === user.id).flatMap((r) => r.scores.filter((s) => s.published).map((s) => s.score));
+    const pupilAvg = myPublished.length > 0 ? myPublished.reduce((a, b) => a + b, 0) / myPublished.length : 0;
     const recentNotices = [...db.notices].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 3);
-    const pendingHomework = user.role === "pupil"
+    const homework = user.role === "pupil"
       ? db.homework.filter((h) => h.grade === user.grade && h.section === (user.classSection || "A"))
       : db.homework.filter((h) => h.teacherId === user.id);
+    const upcoming = [...homework].filter((h) => new Date(h.dueDate) >= new Date(new Date().toDateString())).sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+    return { pupilAvg, recentNotices, homework, upcoming };
+  }, [user, version]);
 
-    return { pupils, teachers, hods, publishedResults, schoolAvg, schoolStatus, pupilAvg, myClasses, mySubjects, recentNotices, pendingHomework };
-  }, [user, db]);
+  if (!user || !stats) return null;
 
-  const roleWelcome: Record<string, string> = {
-    headteacher: "Welcome, Headteacher",
-    deputy: "Welcome, Deputy Headteacher",
-    hod: "Welcome, Head of Department",
-    teacher: "Welcome, Teacher",
-    pupil: "Welcome back, Pupil",
+  const schoolAvg = Number(school?.schoolAvg ?? 0);
+  const schoolStatus = schoolAvg === 0 ? "gray" : getPerformanceColor(schoolAvg);
+  const isJunior = !!user.grade && ["8A", "8B", "9A", "9B"].includes(user.grade);
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+  const firstName = user.fullName.replace(/^(Mr|Mrs|Ms|Miss|Dr)\.?\s+/i, "").split(" ")[0];
+  const roleLine: Record<string, string> = {
+    headteacher: "Headteacher", deputy: "Deputy Headteacher", hod: `Head of ${user.hodDepartment || "Department"}`,
+    teacher: "Teacher", pupil: user.grade ? `Grade ${user.grade}${user.classSection ? ` · Section ${user.classSection}` : ""}` : "Pupil",
   };
 
-  function StatCard({ label, value, icon, color = "emerald" }: { label: string; value: string | number; icon: string; color?: string }) {
-    return (
-      <Card className="flex items-center gap-4">
-        <div className={`w-12 h-12 rounded-xl bg-${color}-100 text-${color}-700 flex items-center justify-center text-2xl`}>
-          {icon}
-        </div>
-        <div>
-          <div className="text-2xl font-bold text-gray-900">{value}</div>
-          <div className="text-xs text-gray-500 uppercase tracking-wide">{label}</div>
-        </div>
-      </Card>
-    );
-  }
-
   return (
-    <div className="space-y-6">
-      <div className="bg-gradient-to-r from-emerald-700 to-emerald-900 text-white rounded-xl p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shadow-lg">
-        <div>
-          <h2 className="text-2xl font-bold">{roleWelcome[user.role]}</h2>
-          <p className="text-emerald-100 mt-1">{user.fullName}</p>
-          <p className="text-emerald-200 text-sm mt-1">
-            {user.grade ? `Grade ${user.grade}${user.classSection ? " - Class " + user.classSection : ""}` : ""}
-            {user.hodDepartment ? `Head of ${user.hodDepartment} Department` : ""}
-          </p>
+    <div className="space-y-5">
+      <div className="relative overflow-hidden bg-gradient-to-r from-emerald-700 to-emerald-900 text-white rounded-2xl p-5 sm:p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-5 shadow-lg">
+        <div className="absolute -right-10 -top-10 w-48 h-48 rounded-full bg-yellow-400/10" aria-hidden />
+        <div className="relative">
+          <p className="text-emerald-200 text-sm">{greeting},</p>
+          <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">{firstName}</h2>
+          <p className="text-emerald-100 text-sm mt-1">{roleLine[user.role]} · {new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}</p>
         </div>
-        <div className="bg-white/10 backdrop-blur rounded-xl px-5 py-3 border border-white/20">
-          <div className="text-xs uppercase tracking-wide text-emerald-100 mb-1">System Status</div>
+        <div className="relative bg-white/10 backdrop-blur rounded-xl px-5 py-3.5 ring-1 ring-white/20 w-full md:w-auto">
+          <div className="text-[11px] uppercase tracking-wider text-emerald-100 mb-1.5">School performance</div>
           <div className="flex items-center gap-3">
-            <StatusLight color={stats.schoolStatus === "green" ? "green" : stats.schoolStatus === "yellow" ? "yellow" : stats.schoolStatus === "red" ? "red" : "gray"} size="lg" />
+            <StatusLight color={schoolStatus} size="lg" />
             <div>
-              <div className="font-bold text-lg">
-                {stats.schoolStatus === "green" ? "Performance Good" : stats.schoolStatus === "yellow" ? "Needs Attention" : stats.schoolStatus === "red" ? "Below Standard" : "No Data Yet"}
+              <div className="font-bold text-lg leading-tight">
+                {schoolStatus === "green" ? "Performing well" : schoolStatus === "yellow" ? "Needs attention" : schoolStatus === "red" ? "Below standard" : "No data yet"}
               </div>
-              <div className="text-xs text-emerald-100">School Average: {stats.schoolAvg.toFixed(1)}%</div>
+              <div className="text-xs text-emerald-100">School average {schoolAvg.toFixed(1)}%</div>
             </div>
           </div>
         </div>
       </div>
 
       {user.role === "pupil" && (
-        <Card className="border-l-4" >
-          <div className="flex items-center justify-between flex-wrap gap-3">
+        <Card>
+          <div className="flex items-center justify-between flex-wrap gap-4">
             <div>
-              <h3 className="font-semibold text-gray-900">Your Academic Standing</h3>
-              <p className="text-sm text-gray-600">Current average across all published results</p>
+              <h3 className="font-semibold text-gray-900">Your academic standing</h3>
+              <p className="text-sm text-gray-500">Average across all your published results</p>
             </div>
             <div className="flex items-center gap-3">
-              <StatusLight
-                size="lg"
-                color={stats.pupilAvg === 0 ? "gray" : getPerformanceColor(stats.pupilAvg) as any}
-              />
+              <StatusLight size="lg" color={stats.pupilAvg === 0 ? "gray" : getPerformanceColor(stats.pupilAvg)} />
               <div>
-                <div className="text-2xl font-bold text-gray-900">{stats.pupilAvg.toFixed(1)}%</div>
+                <div className="text-2xl font-bold text-gray-900 tabular-nums">{stats.pupilAvg.toFixed(1)}%</div>
                 <div className="text-xs text-gray-500">
-                  {stats.pupilAvg === 0 ? "No results published yet" :
-                    stats.pupilAvg >= 65 ? "Excellent! Keep it up." :
-                    stats.pupilAvg >= 50 ? "You can do better!" : "Needs urgent improvement"}
+                  {stats.pupilAvg === 0 ? "No results published yet" : stats.pupilAvg >= 65 ? "Excellent — keep it up!" : stats.pupilAvg >= 50 ? "Good. You can do even better!" : "Let's work on improving this"}
                 </div>
               </div>
             </div>
           </div>
+          <div className={`h-2 rounded-full mt-4 ${stats.pupilAvg < 50 ? "bg-red-100" : stats.pupilAvg < 65 ? "bg-yellow-100" : "bg-green-100"}`}>
+            <div className={`h-full rounded-full transition-all duration-700 ${stats.pupilAvg < 50 ? "bg-red-500" : stats.pupilAvg < 65 ? "bg-yellow-500" : "bg-green-500"}`} style={{ width: `${Math.min(stats.pupilAvg, 100)}%` }} />
+          </div>
         </Card>
       )}
 
-      {user.role === "pupil" && (
-        <div>
-          <div className={`h-2 rounded-full mb-2 ${stats.pupilAvg < 50 ? "bg-red-100" : stats.pupilAvg < 65 ? "bg-yellow-100" : "bg-green-100"}`}>
-            <div
-              className={`h-full rounded-full transition-all ${stats.pupilAvg < 50 ? "bg-red-500" : stats.pupilAvg < 65 ? "bg-yellow-500" : "bg-green-500"}`}
-              style={{ width: `${Math.min(stats.pupilAvg, 100)}%` }}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Stats grid for admin/teacher */}
       {user.role !== "pupil" && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <StatCard label="Total Pupils" value={stats.pupils.length} icon="🎓" color="emerald" />
-          <StatCard label="Teachers" value={stats.teachers.length} icon="👨‍🏫" color="blue" />
-          <StatCard label="Heads of Dept" value={stats.hods.length} icon="📚" color="amber" />
-          <StatCard label="Published Results" value={stats.publishedResults.length} icon="📊" color="purple" />
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+          <StatCard label="Pupils" value={school?.pupils ?? "—"} icon={GraduationCap} tone="emerald" />
+          <StatCard label="Teachers" value={school?.teachers ?? "—"} icon={Users} tone="blue" />
+          <StatCard label="Heads of dept" value={school?.hods ?? "—"} icon={Library} tone="amber" />
+          <StatCard label="Published results" value={school?.publishedResults ?? "—"} icon={BarChart3} tone="purple" />
         </div>
       )}
 
       {(user.role === "teacher" || user.role === "hod") && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <Card>
-            <h3 className="font-semibold text-gray-900 mb-3">My Classes</h3>
-            {stats.myClasses.length === 0 ? (
+            <h3 className="font-semibold text-gray-900 mb-3">My classes</h3>
+            {(user.classes || []).length === 0 ? (
               <p className="text-sm text-gray-500">No classes assigned yet.</p>
             ) : (
-              <div className="flex flex-wrap gap-2">
-                {stats.myClasses.map((c, i) => (
-                  <Badge key={i} color="blue">{c.grade} - Section {c.section}</Badge>
-                ))}
+              <div className="flex flex-wrap gap-1.5">
+                {(user.classes || []).map((c, i) => <Badge key={i} color="blue">{c.grade} · Section {c.section}</Badge>)}
               </div>
             )}
           </Card>
           <Card>
-            <h3 className="font-semibold text-gray-900 mb-3">My Subjects</h3>
-            {stats.mySubjects.length === 0 ? (
-              <p className="text-sm text-gray-500">No subjects assigned yet. The HoD will assign subjects.</p>
+            <h3 className="font-semibold text-gray-900 mb-3">My subjects</h3>
+            {(user.subjects || []).length === 0 ? (
+              <p className="text-sm text-gray-500">No subjects assigned yet. Your HoD will assign them.</p>
             ) : (
-              <div className="flex flex-wrap gap-2">
-                {stats.mySubjects.map((s, i) => (
-                  <Badge key={i} color="emerald">{s}</Badge>
-                ))}
+              <div className="flex flex-wrap gap-1.5">
+                {(user.subjects || []).map((s, i) => <Badge key={i} color="emerald">{s}</Badge>)}
               </div>
             )}
           </Card>
@@ -171,26 +155,26 @@ export default function Overview() {
 
       {user.role === "hod" && (
         <Card>
-          <h3 className="font-semibold text-gray-900 mb-2">Department: {user.hodDepartment}</h3>
-          <p className="text-sm text-gray-600">You can assign subjects to teachers in your department from the Teachers tab.</p>
+          <h3 className="font-semibold text-gray-900 mb-1">Department: {user.hodDepartment}</h3>
+          <p className="text-sm text-gray-500">Assign subjects and classes to teachers from the <button onClick={() => onNavigate?.("teachers")} className="text-emerald-700 font-medium hover:underline">Teachers</button> page.</p>
         </Card>
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Card>
-          <h3 className="font-semibold text-gray-900 mb-3">📢 Latest Notices</h3>
+          <SectionTitle icon={Megaphone} onMore={() => onNavigate?.("notices")}>Latest notices</SectionTitle>
           {stats.recentNotices.length === 0 ? (
             <p className="text-sm text-gray-500">No notices yet.</p>
           ) : (
             <div className="space-y-3">
               {stats.recentNotices.map((n) => (
-                <div key={n.id} className="border-l-4 border-emerald-500 pl-3 py-1">
-                  <div className="flex items-center justify-between">
-                    <div className="font-medium text-sm">{n.title}</div>
-                    <Badge color={n.category === "event" ? "blue" : n.category === "academic" ? "emerald" : "gray"}>{n.category}</Badge>
+                <div key={n.id} className="border-l-4 border-emerald-500 pl-3 py-0.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="font-medium text-sm text-gray-900">{n.title}</div>
+                    <Badge color={n.category === "event" ? "blue" : n.category === "academic" ? "emerald" : "gray"} className="capitalize">{n.category}</Badge>
                   </div>
                   <p className="text-xs text-gray-600 mt-1 line-clamp-2">{n.content}</p>
-                  <div className="text-[10px] text-gray-400 mt-1">{n.postedByName} • {new Date(n.createdAt).toLocaleDateString()}</div>
+                  <div className="text-[11px] text-gray-400 mt-1">{n.postedByName} · {new Date(n.createdAt).toLocaleDateString()}</div>
                 </div>
               ))}
             </div>
@@ -198,51 +182,43 @@ export default function Overview() {
         </Card>
 
         <Card>
-          <h3 className="font-semibold text-gray-900 mb-3">📝 Homework</h3>
+          <SectionTitle icon={NotebookPen} onMore={() => onNavigate?.("homework")}>{user.role === "pupil" ? "Upcoming homework" : "My homework"}</SectionTitle>
           {user.role === "pupil" ? (
-            stats.pendingHomework.length === 0 ? (
-              <p className="text-sm text-gray-500">No homework posted for your class.</p>
+            stats.upcoming.length === 0 ? (
+              <p className="text-sm text-gray-500">Nothing due. Enjoy your free time!</p>
             ) : (
               <div className="space-y-3">
-                {stats.pendingHomework.slice(0, 4).map((h) => (
-                  <div key={h.id} className="border-l-4 border-amber-500 pl-3 py-1">
-                    <div className="font-medium text-sm">{h.title}</div>
-                    <div className="text-xs text-gray-600">{h.subject} • Due {new Date(h.dueDate).toLocaleDateString()}</div>
+                {stats.upcoming.slice(0, 4).map((h) => (
+                  <div key={h.id} className="border-l-4 border-amber-500 pl-3 py-0.5">
+                    <div className="font-medium text-sm text-gray-900">{h.title}</div>
+                    <div className="text-xs text-gray-500">{h.subject} · Due {new Date(h.dueDate).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}</div>
                   </div>
                 ))}
               </div>
             )
           ) : (
-            <p className="text-sm text-gray-600">You have <strong>{stats.pendingHomework.length}</strong> homework assignments posted. Go to Homework tab to manage.</p>
+            <p className="text-sm text-gray-600">You have posted <strong className="text-gray-900">{stats.homework.length}</strong> assignment{stats.homework.length === 1 ? "" : "s"}, <strong className="text-gray-900">{stats.upcoming.length}</strong> still open.</p>
           )}
         </Card>
       </div>
 
       {user.role === "pupil" && (
-        <Card>
-          <h3 className="font-semibold text-gray-900 mb-3">📚 Your Subjects</h3>
-          <p className="text-sm text-gray-600 mb-2">
-            {user.grade && ["8A", "8B", "9A", "9B"].includes(user.grade)
-              ? "Junior Secondary" : "Senior Secondary"} Subjects
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {(user.grade && ["8A", "8B", "9A", "9B"].includes(user.grade) ? JUNIOR_SUBJECTS : SENIOR_SUBJECTS).map((s) => (
-              <Badge key={s} color="emerald">{s}</Badge>
-            ))}
-          </div>
-        </Card>
-      )}
-
-      {user.role === "pupil" && (
-        <Card>
-          <h3 className="font-semibold text-gray-900 mb-2">Quick Info</h3>
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            <div><span className="text-gray-500">Grade:</span> <strong>{user.grade}</strong></div>
-            <div><span className="text-gray-500">Class Section:</span> <strong>{user.classSection || "A"}</strong></div>
-            <div><span className="text-gray-500">Pupil ID:</span> <strong>{user.pupilId || "N/A"}</strong></div>
-            <div><span className="text-gray-500">Province/District:</span> <strong>{user.province || "-"} / {user.district || "-"}</strong></div>
-          </div>
-        </Card>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <Card className="lg:col-span-2">
+            <SectionTitle icon={BookOpen}>Your subjects · {isJunior ? "Junior Secondary" : "Senior Secondary"}</SectionTitle>
+            <div className="flex flex-wrap gap-1.5">
+              {(isJunior ? JUNIOR_SUBJECTS : SENIOR_SUBJECTS).map((s) => <Badge key={s} color="emerald">{s}</Badge>)}
+            </div>
+          </Card>
+          <Card>
+            <h3 className="font-semibold text-gray-900 mb-3">Quick info</h3>
+            <dl className="space-y-2 text-sm">
+              {([["Grade", user.grade], ["Class section", user.classSection || "A"], ["Pupil ID", user.pupilId || "N/A"], ["Province", user.province], ["District", user.district]] as [string, string | undefined][]).map(([k, v]) => (
+                <div key={k} className="flex justify-between gap-3"><dt className="text-gray-500">{k}</dt><dd className="font-medium text-gray-900 text-right">{v || "—"}</dd></div>
+              ))}
+            </dl>
+          </Card>
+        </div>
       )}
     </div>
   );

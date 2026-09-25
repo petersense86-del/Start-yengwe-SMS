@@ -1,29 +1,33 @@
 import { useState, useMemo, useRef } from "react";
+import { GraduationCap, Plus, Search } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
-import { Card, Button, Input, Select, Modal, Badge, Table, EmptyState, PageHeader } from "../components/ui";
-import { getDb, saveDb, genId, logActivity } from "../utils/db";
+import { Card, Button, Input, Select, Modal, Badge, Table, EmptyState, PageHeader, Avatar, RowAction, Alert } from "../components/ui";
+import { toast, confirmDialog, showCredentials } from "../components/feedback";
+import { getDb, saveDb, logActivity, refreshData, useDbVersion } from "../utils/db";
+import { adminUsers } from "../lib/supabase";
+import { readImage, IMAGE_SIZES } from "../utils/image";
 import { PROVINCES, GRADES, JUNIOR_SUBJECTS, SENIOR_SUBJECTS } from "../data/constants";
 import type { User } from "../types";
 
 export default function Pupils() {
   const { user } = useAuth();
-  if (!user) return null;
-  const currentUser = user!;
-  const canRegister = currentUser.role === "headteacher" || currentUser.role === "deputy";
-  const canEdit = currentUser.role === "headteacher" || currentUser.role === "deputy";
-  const canDelete = currentUser.role === "headteacher";
-  const isIT = currentUser.role === "headteacher" || currentUser.role === "deputy" || (currentUser.role === "hod" && currentUser.hodDepartment === "IT Department");
-
+  const version = useDbVersion();
   const picRef = useRef<HTMLInputElement>(null);
-  const [refreshKey, setRefreshKey] = useState(0);
-  const db = useMemo(() => getDb(), [refreshKey]);
-
-  const pupils = useMemo(() => db.users.filter((u) => u.role === "pupil"), [db]);
   const [modal, setModal] = useState<{ open: boolean; pupil: User | null; mode: "register" | "view" | "edit" }>({ open: false, pupil: null, mode: "register" });
   const [search, setSearch] = useState("");
   const [gradeFilter, setGradeFilter] = useState("");
   const [form, setForm] = useState<Partial<User>>({});
   const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const db = useMemo(() => getDb(), [version]);
+  const pupils = useMemo(() => db.users.filter((u) => u.role === "pupil").sort((a, b) => a.fullName.localeCompare(b.fullName)), [db]);
+
+  if (!user) return null;
+  const currentUser = user;
+  const canRegister = currentUser.role === "headteacher" || currentUser.role === "deputy";
+  const canEdit = canRegister;
+  const canDelete = currentUser.role === "headteacher";
+  const isIT = canRegister || (currentUser.role === "hod" && currentUser.hodDepartment === "IT Department");
 
   const filtered = pupils.filter((p) => {
     const s = search.toLowerCase();
@@ -32,145 +36,146 @@ export default function Pupils() {
     return m1 && m2;
   });
 
-  function handleProfilePicUpload(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleProfilePicUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
+    e.target.value = "";
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      setForm((prev) => ({ ...prev, profilePicture: reader.result as string }));
-    };
-    reader.readAsDataURL(file);
+    try {
+      const img = await readImage(file, IMAGE_SIZES.avatar);
+      setForm((prev) => ({ ...prev, profilePicture: img }));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Upload failed.");
+    }
   }
 
   function openRegister() {
-    setForm({ role: "pupil", gender: "Male", password: "1234", classSection: "A" });
+    setForm({ role: "pupil", gender: "Male", classSection: "A" });
     setModal({ open: true, pupil: null, mode: "register" });
     setError("");
   }
   function openView(p: User) { setModal({ open: true, pupil: p, mode: "view" }); }
   function openEdit(p: User) {
-    if (!canEdit) { alert("Only the Headteacher and Deputy can edit pupil details."); return; }
     setForm({ ...p }); setModal({ open: true, pupil: p, mode: "edit" }); setError("");
   }
+  function closeModal() { setModal({ ...modal, open: false }); }
 
-  function savePupil() {
+  async function savePupil() {
     setError("");
-    if (!form.fullName || !form.grade) { setError("Full name and grade are required"); return; }
-    const db2 = getDb();
+    if (!form.fullName?.trim() || !form.grade) { setError("Full name and grade are required."); return; }
     if (modal.mode === "register") {
-      if (!form.username) { setError("Username is required"); return; }
-      const exists = db2.users.some((u) => u.username.toLowerCase() === form.username!.toLowerCase());
-      if (exists) { setError("Username already exists"); return; }
-      const newPupil: User = {
-        id: genId("pupil"),
-        username: form.username,
-        password: "1234",
-        fullName: form.fullName,
-        role: "pupil",
-        email: form.email,
-        phone: form.phone,
-        profilePicture: form.profilePicture,
-        gender: form.gender as "Male" | "Female",
-        grade: form.grade as any,
-        classSection: form.classSection || "A",
-        pupilId: form.pupilId || `PUP-${Date.now().toString().slice(-5)}`,
-        province: form.province,
-        district: form.district,
-        dateOfBirth: form.dateOfBirth,
-        guardiansName: form.guardiansName,
-        guardiansPhone: form.guardiansPhone,
-        address: form.address,
-        enrollmentYear: new Date().getFullYear(),
-        createdAt: new Date().toISOString(),
-        mustChangePassword: true,
-      };
-      db2.users.push(newPupil);
-      logActivity(currentUser.id, currentUser.fullName, currentUser.role, `Registered pupil ${newPupil.fullName}`, `Grade ${newPupil.grade}`);
-    } else if (modal.mode === "edit" && modal.pupil) {
+      if (!form.username) { setError("Username is required."); return; }
+      if (pupils.some((u) => u.username === form.username)) { setError("That username already exists."); return; }
+      setSaving(true);
+      try {
+        const profile = {
+          email: form.email, phone: form.phone, profilePicture: form.profilePicture, gender: form.gender,
+          grade: form.grade, classSection: form.classSection || "A",
+          pupilId: form.pupilId || `PUP-${Date.now().toString().slice(-5)}`,
+          province: form.province, district: form.district, dateOfBirth: form.dateOfBirth,
+          guardiansName: form.guardiansName, guardiansPhone: form.guardiansPhone, address: form.address,
+          enrollmentYear: new Date().getFullYear(),
+        };
+        const res = await adminUsers({ action: "create", role: "pupil", username: form.username, fullName: form.fullName.trim(), profile });
+        await refreshData(["users"]);
+        closeModal();
+        showCredentials({ title: "Pupil registered", name: form.fullName.trim(), username: res.username!, password: res.password! });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Could not register pupil.");
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+    if (modal.mode === "edit" && modal.pupil) {
+      const db2 = getDb();
       const idx = db2.users.findIndex((u) => u.id === modal.pupil!.id);
       if (idx >= 0) {
-        db2.users[idx] = { ...db2.users[idx], ...form };
+        db2.users[idx] = { ...db2.users[idx], ...form, username: db2.users[idx].username, role: "pupil" };
+        saveDb(db2);
         logActivity(currentUser.id, currentUser.fullName, currentUser.role, `Edited pupil ${db2.users[idx].fullName}`);
+        toast.success("Pupil details saved.");
       }
+      closeModal();
     }
-    saveDb(db2);
-    setModal({ open: false, pupil: null, mode: "register" });
-    setRefreshKey((k) => k + 1);
   }
 
-  function deletePupil(p: User) {
-    if (!confirm(`Delete pupil ${p.fullName}? This will remove all their data.`)) return;
-    const db2 = getDb();
-    db2.users = db2.users.filter((u) => u.id !== p.id);
-    db2.results = db2.results.filter((r) => r.pupilId !== p.id);
-    saveDb(db2);
-    logActivity(currentUser.id, currentUser.fullName, currentUser.role, `Deleted pupil ${p.fullName}`);
-    setRefreshKey((k) => k + 1);
+  async function deletePupil(p: User) {
+    const ok = await confirmDialog({ title: "Delete pupil?", message: `${p.fullName}'s account and all of their results will be permanently deleted.`, confirmLabel: "Delete pupil", danger: true });
+    if (!ok) return;
+    try {
+      await adminUsers({ action: "delete", userId: p.id });
+      await refreshData(["users", "results"]);
+      toast.success(`${p.fullName} was deleted.`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not delete pupil.");
+    }
   }
 
-  function resetPassword(p: User) {
-    if (!confirm(`Reset password for ${p.fullName} to default (1234)?`)) return;
-    const db2 = getDb();
-    const idx = db2.users.findIndex((u) => u.id === p.id);
-    if (idx >= 0) {
-      db2.users[idx].password = "1234";
-      db2.users[idx].mustChangePassword = true;
-      saveDb(db2);
-      logActivity(currentUser.id, currentUser.fullName, currentUser.role, `Reset password for ${p.fullName}`);
-      alert("Password reset to 1234");
-      setRefreshKey((k) => k + 1);
+  async function resetPassword(p: User) {
+    const ok = await confirmDialog({ title: "Reset password?", message: `A new temporary password will be generated for ${p.fullName}. Their current password will stop working.`, confirmLabel: "Reset password" });
+    if (!ok) return;
+    try {
+      const res = await adminUsers({ action: "reset_password", userId: p.id });
+      await refreshData(["users"]);
+      showCredentials({ title: "Password reset", name: p.fullName, username: res.username!, password: res.password! });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not reset password.");
     }
   }
 
   const provinces = Object.keys(PROVINCES);
   const districts = form.province ? PROVINCES[form.province]?.districts || [] : [];
-  const isJunior = form.grade && ["8A", "8B", "9A", "9B"].includes(form.grade as string);
+  const isJuniorGrade = (g?: string) => !!g && ["8A", "8B", "9A", "9B"].includes(g);
 
   return (
     <div>
-      <PageHeader title="Pupils Management" subtitle={`Total pupils: ${pupils.length}`}>
-        {canRegister && <Button variant="gold" onClick={openRegister}>+ Register New Pupil</Button>}
+      <PageHeader title="Pupils" subtitle={`${pupils.length} pupil${pupils.length === 1 ? "" : "s"} enrolled`}>
+        {canRegister && <Button variant="gold" onClick={openRegister}><Plus className="w-4 h-4" />Register pupil</Button>}
       </PageHeader>
 
       <Card className="mb-4">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <Input placeholder="Search by name, ID, username..." value={search} onChange={(e) => setSearch(e.target.value)} />
-          <Select value={gradeFilter} onChange={(e) => setGradeFilter(e.target.value)}>
-            <option value="">All Grades</option>
-            {GRADES.map((g) => <option key={g} value={g}>{g}</option>)}
-          </Select>
-          <div className="text-sm text-gray-500 flex items-center">
-            Default password for new pupils: <Badge color="emerald" className="ml-2">1234</Badge>
+        <div className="grid grid-cols-1 sm:grid-cols-[1fr_200px] gap-3">
+          <div className="relative">
+            <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <Input aria-label="Search pupils" placeholder="Search by name, pupil ID or username…" value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
           </div>
+          <Select aria-label="Filter by grade" value={gradeFilter} onChange={(e) => setGradeFilter(e.target.value)}>
+            <option value="">All grades</option>
+            {GRADES.map((g) => <option key={g} value={g}>Grade {g}</option>)}
+          </Select>
         </div>
       </Card>
 
       <Card>
         {filtered.length === 0 ? (
-          <EmptyState message="No pupils found." />
+          <EmptyState
+            icon={<GraduationCap className="w-6 h-6" />}
+            message={pupils.length === 0 ? "No pupils registered yet." : "No pupils match your search."}
+            action={pupils.length === 0 && canRegister ? <Button variant="gold" onClick={openRegister}><Plus className="w-4 h-4" />Register the first pupil</Button> : undefined}
+          />
         ) : (
-          <Table headers={["", "Name", "Pupil ID", "Grade", "Section", "Gender", "Province", "Actions"]}>
+          <Table headers={["Pupil", "Pupil ID", "Grade", "Gender", "Province", ""]}>
             {filtered.map((p) => (
-              <tr key={p.id} className="hover:bg-gray-50">
+              <tr key={p.id} className="hover:bg-gray-50/80 transition-colors">
                 <td className="px-4 py-3">
-                  {p.profilePicture ? (
-                    <img src={p.profilePicture} className="w-9 h-9 rounded-full object-cover" alt="" />
-                  ) : (
-                    <div className="w-9 h-9 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">{p.fullName.charAt(0)}</div>
-                  )}
+                  <div className="flex items-center gap-3 min-w-[180px]">
+                    <Avatar name={p.fullName} src={p.profilePicture} size="sm" />
+                    <div className="min-w-0">
+                      <div className="font-medium text-gray-900 truncate">{p.fullName}</div>
+                      <div className="text-xs text-gray-500">@{p.username}</div>
+                    </div>
+                  </div>
                 </td>
-                <td className="px-4 py-3 font-medium">{p.fullName}</td>
-                <td className="px-4 py-3 text-xs">{p.pupilId || "-"}</td>
-                <td className="px-4 py-3"><Badge color="emerald">{p.grade}</Badge></td>
-                <td className="px-4 py-3">{p.classSection || "-"}</td>
-                <td className="px-4 py-3">{p.gender || "-"}</td>
-                <td className="px-4 py-3 text-xs">{p.province || "-"}</td>
+                <td className="px-4 py-3 text-xs font-mono text-gray-600">{p.pupilId || "—"}</td>
+                <td className="px-4 py-3"><Badge color="emerald">{p.grade}{p.classSection && !p.grade?.endsWith(p.classSection) ? ` · ${p.classSection}` : ""}</Badge></td>
+                <td className="px-4 py-3 text-gray-600">{p.gender || "—"}</td>
+                <td className="px-4 py-3 text-xs text-gray-600">{p.province || "—"}</td>
                 <td className="px-4 py-3">
-                  <div className="flex gap-1 flex-wrap">
-                    <button onClick={() => openView(p)} className="text-blue-600 hover:text-blue-800 text-xs font-medium">View</button>
-                    {canEdit && <><span className="text-gray-300">|</span><button onClick={() => openEdit(p)} className="text-amber-600 hover:text-amber-800 text-xs font-medium">Edit</button></>}
-                    {canDelete && <><span className="text-gray-300">|</span><button onClick={() => deletePupil(p)} className="text-red-600 hover:text-red-800 text-xs font-medium">Delete</button></>}
-                    {canRegister && <><span className="text-gray-300">|</span><button onClick={() => resetPassword(p)} className="text-gray-600 hover:text-gray-800 text-xs font-medium">Reset Pwd</button></>}
+                  <div className="flex gap-0.5 justify-end flex-wrap">
+                    <RowAction tone="primary" onClick={() => openView(p)}>View</RowAction>
+                    {canEdit && <RowAction tone="warn" onClick={() => openEdit(p)}>Edit</RowAction>}
+                    {canRegister && <RowAction onClick={() => resetPassword(p)}>Reset password</RowAction>}
+                    {canDelete && <RowAction tone="danger" onClick={() => deletePupil(p)}>Delete</RowAction>}
                   </div>
                 </td>
               </tr>
@@ -179,105 +184,90 @@ export default function Pupils() {
         )}
       </Card>
 
-      <Modal open={modal.open} onClose={() => setModal({ ...modal, open: false })} title={modal.mode === "register" ? "Register New Pupil" : modal.mode === "edit" ? `Edit ${modal.pupil?.fullName}` : `Pupil Details - ${modal.pupil?.fullName}`} size="lg">
+      <Modal open={modal.open} onClose={closeModal} title={modal.mode === "register" ? "Register new pupil" : modal.mode === "edit" ? `Edit ${modal.pupil?.fullName}` : modal.pupil?.fullName || "Pupil"} size="lg">
         {modal.mode === "view" && modal.pupil ? (
-          <div className="space-y-3 text-sm">
-            <div className="flex items-center gap-4 mb-4">
-              {modal.pupil.profilePicture ? (
-                <img src={modal.pupil.profilePicture} className="w-20 h-20 rounded-full object-cover border-2 border-emerald-600" alt="" />
-              ) : (
-                <div className="w-20 h-20 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center text-2xl font-bold">{modal.pupil.fullName.charAt(0)}</div>
-              )}
+          <div className="space-y-5 text-sm">
+            <div className="flex items-center gap-4">
+              <Avatar name={modal.pupil.fullName} src={modal.pupil.profilePicture} size="lg" className="ring-2 ring-emerald-600 ring-offset-2" />
               <div>
-                <div className="font-bold text-lg">{modal.pupil.fullName}</div>
-                <div><Badge color="emerald">{modal.pupil.grade}{modal.pupil.classSection ? ` - ${modal.pupil.classSection}` : ""}</Badge></div>
+                <div className="font-bold text-lg text-gray-900">{modal.pupil.fullName}</div>
+                <Badge color="emerald">Grade {modal.pupil.grade}{modal.pupil.classSection ? ` · Section ${modal.pupil.classSection}` : ""}</Badge>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div><strong>Pupil ID:</strong> {modal.pupil.pupilId || "-"}</div>
-              <div><strong>Username:</strong> {modal.pupil.username}</div>
-              <div><strong>Gender:</strong> {modal.pupil.gender || "-"}</div>
-              <div><strong>Email:</strong> {modal.pupil.email || "-"}</div>
-              <div><strong>Phone:</strong> {modal.pupil.phone || "-"}</div>
-              <div><strong>DOB:</strong> {modal.pupil.dateOfBirth || "-"}</div>
-              <div><strong>Province:</strong> {modal.pupil.province || "-"}</div>
-              <div><strong>District:</strong> {modal.pupil.district || "-"}</div>
-              <div><strong>Guardian:</strong> {modal.pupil.guardiansName || "-"}</div>
-              <div><strong>Guardian Phone:</strong> {modal.pupil.guardiansPhone || "-"}</div>
-              <div className="col-span-2"><strong>Address:</strong> {modal.pupil.address || "-"}</div>
-              <div><strong>Enrolled:</strong> {modal.pupil.enrollmentYear || "-"}</div>
-            </div>
-            <div className="mt-4 pt-4 border-t">
-              <h4 className="font-semibold mb-2">Subjects ({isJunior ? "Junior Secondary" : "Senior Secondary"})</h4>
+            <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
+              {([
+                ["Pupil ID", modal.pupil.pupilId], ["Username", modal.pupil.username], ["Gender", modal.pupil.gender],
+                ["Email", modal.pupil.email], ["Phone", modal.pupil.phone], ["Date of birth", modal.pupil.dateOfBirth],
+                ["Province", modal.pupil.province], ["District", modal.pupil.district], ["Guardian", modal.pupil.guardiansName],
+                ["Guardian phone", modal.pupil.guardiansPhone], ["Enrolled", modal.pupil.enrollmentYear?.toString()], ["Address", modal.pupil.address],
+              ] as [string, string | undefined][]).map(([k, v]) => (
+                <div key={k} className="flex justify-between sm:block gap-4 border-b sm:border-0 border-gray-100 pb-2 sm:pb-0">
+                  <dt className="text-xs text-gray-500">{k}</dt>
+                  <dd className="font-medium text-gray-900 text-right sm:text-left break-words">{v || "—"}</dd>
+                </div>
+              ))}
+            </dl>
+            <div className="pt-4 border-t border-gray-100">
+              <h4 className="font-semibold text-gray-900 mb-2">Subjects · {isJuniorGrade(modal.pupil.grade) ? "Junior Secondary" : "Senior Secondary"}</h4>
               <div className="flex flex-wrap gap-1.5">
-                {(modal.pupil.grade && ["8A", "8B", "9A", "9B"].includes(modal.pupil.grade) ? JUNIOR_SUBJECTS : SENIOR_SUBJECTS).map((s) => (
-                  <Badge key={s} color="gray">{s}</Badge>
-                ))}
+                {(isJuniorGrade(modal.pupil.grade) ? JUNIOR_SUBJECTS : SENIOR_SUBJECTS).map((s) => <Badge key={s} color="gray">{s}</Badge>)}
               </div>
             </div>
           </div>
         ) : (
           <div className="space-y-4">
-            {error && <div className="p-2 rounded bg-red-50 border border-red-200 text-red-700 text-sm">{error}</div>}
+            {error && <Alert tone="error">{error}</Alert>}
 
             {isIT && (
-              <div className="flex items-center gap-4 p-3 rounded-lg bg-gray-50 border">
-                {form.profilePicture ? (
-                  <img src={form.profilePicture} alt="Preview" className="w-16 h-16 rounded-full object-cover border-2 border-emerald-600" />
-                ) : (
-                  <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center text-2xl font-bold">
-                    {(form.fullName || "?").charAt(0)}
-                  </div>
-                )}
+              <div className="flex items-center gap-4 p-3 rounded-xl bg-gray-50 ring-1 ring-gray-200">
+                <Avatar name={form.fullName || "?"} src={form.profilePicture} size="lg" />
                 <div>
-                  <div className="font-medium text-sm">Profile Picture</div>
-                  <div className="text-xs text-gray-600 mb-2">Upload from device (Headteacher, Deputy, or IT HoD only).</div>
-                  <Button variant="secondary" className="!py-1 !px-3 !text-xs" onClick={() => picRef.current?.click()}>Choose Photo</Button>
-                  {form.profilePicture && (
-                    <button type="button" onClick={() => setForm({ ...form, profilePicture: undefined })} className="ml-2 text-xs text-red-600 hover:underline">Remove</button>
-                  )}
+                  <div className="font-medium text-sm text-gray-900">Profile picture</div>
+                  <div className="text-xs text-gray-500 mb-2">Headteacher, Deputy or IT HoD only.</div>
+                  <div className="flex items-center gap-2">
+                    <Button variant="ghost" className="!py-1 !px-3 !text-xs" onClick={() => picRef.current?.click()}>Choose photo</Button>
+                    {form.profilePicture && <button type="button" onClick={() => setForm({ ...form, profilePicture: undefined })} className="text-xs text-red-600 font-medium hover:underline">Remove</button>}
+                  </div>
                   <input ref={picRef} type="file" accept="image/*" className="hidden" onChange={handleProfilePicUpload} />
                 </div>
               </div>
             )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <Input label="Full Name *" value={form.fullName || ""} onChange={(e) => setForm({ ...form, fullName: e.target.value })} />
-              <Input label="Username *" value={form.username || ""} onChange={(e) => setForm({ ...form, username: e.target.value.toLowerCase().replace(/\s/g, "") })} disabled={modal.mode === "edit" && !canEdit} />
-              <Input label="Pupil ID" value={form.pupilId || ""} onChange={(e) => setForm({ ...form, pupilId: e.target.value })} />
-              <Select label="Grade *" value={form.grade || ""} onChange={(e) => setForm({ ...form, grade: e.target.value as any })}>
-                <option value="">-- Select --</option>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Input label="Full name *" value={form.fullName || ""} onChange={(e) => setForm({ ...form, fullName: e.target.value })} autoFocus />
+              <Input label="Username *" value={form.username || ""} onChange={(e) => setForm({ ...form, username: e.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, "") })} disabled={modal.mode === "edit"} hint={modal.mode === "register" ? "Used to sign in. 3–32 letters/numbers." : "Usernames can't be changed"} />
+              <Input label="Pupil ID" value={form.pupilId || ""} onChange={(e) => setForm({ ...form, pupilId: e.target.value })} placeholder="Auto-generated if blank" />
+              <Select label="Grade *" value={form.grade || ""} onChange={(e) => setForm({ ...form, grade: e.target.value as User["grade"] })}>
+                <option value="">Select…</option>
                 {GRADES.map((g) => <option key={g} value={g}>{g}</option>)}
               </Select>
-              <Input label="Class Section" value={form.classSection || ""} onChange={(e) => setForm({ ...form, classSection: e.target.value.toUpperCase() })} maxLength={2} placeholder="e.g. A, B" />
+              <Input label="Class section" value={form.classSection || ""} onChange={(e) => setForm({ ...form, classSection: e.target.value.toUpperCase() })} maxLength={2} placeholder="e.g. A, B" />
               <Select label="Gender" value={form.gender || ""} onChange={(e) => setForm({ ...form, gender: e.target.value as "Male" | "Female" })}>
-                <option value="">-- Select --</option>
+                <option value="">Select…</option>
                 <option value="Male">Male</option>
                 <option value="Female">Female</option>
               </Select>
               <Input label="Email" type="email" value={form.email || ""} onChange={(e) => setForm({ ...form, email: e.target.value })} />
-              <Input label="Phone" value={form.phone || ""} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
-              <Input label="Date of Birth" type="date" value={form.dateOfBirth || ""} onChange={(e) => setForm({ ...form, dateOfBirth: e.target.value })} />
+              <Input label="Phone" type="tel" value={form.phone || ""} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+              <Input label="Date of birth" type="date" value={form.dateOfBirth || ""} onChange={(e) => setForm({ ...form, dateOfBirth: e.target.value })} />
               <Select label="Province" value={form.province || ""} onChange={(e) => setForm({ ...form, province: e.target.value, district: "" })}>
-                <option value="">-- Select --</option>
+                <option value="">Select…</option>
                 {provinces.map((p) => <option key={p} value={p}>{p}</option>)}
               </Select>
               <Select label="District" value={form.district || ""} onChange={(e) => setForm({ ...form, district: e.target.value })} disabled={!form.province}>
-                <option value="">-- Select --</option>
+                <option value="">Select…</option>
                 {districts.map((d) => <option key={d} value={d}>{d}</option>)}
               </Select>
-              <Input label="Guardian Name" value={form.guardiansName || ""} onChange={(e) => setForm({ ...form, guardiansName: e.target.value })} />
-              <Input label="Guardian Phone" value={form.guardiansPhone || ""} onChange={(e) => setForm({ ...form, guardiansPhone: e.target.value })} />
-              <Input label="Home Address" value={form.address || ""} onChange={(e) => setForm({ ...form, address: e.target.value })} className="md:col-span-2" />
+              <Input label="Guardian name" value={form.guardiansName || ""} onChange={(e) => setForm({ ...form, guardiansName: e.target.value })} />
+              <Input label="Guardian phone" type="tel" value={form.guardiansPhone || ""} onChange={(e) => setForm({ ...form, guardiansPhone: e.target.value })} />
+              <Input label="Home address" value={form.address || ""} onChange={(e) => setForm({ ...form, address: e.target.value })} className="md:col-span-2" />
             </div>
             {modal.mode === "register" && (
-              <div className="p-3 rounded bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm">
-                Default password is <strong>1234</strong>. The pupil will be prompted to change it on first login.
-              </div>
+              <Alert tone="success">A secure temporary password is generated automatically and shown once. The pupil chooses their own password at first sign-in.</Alert>
             )}
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="ghost" onClick={() => setModal({ ...modal, open: false })}>Cancel</Button>
-              <Button variant="gold" onClick={savePupil}>{modal.mode === "register" ? "Register Pupil" : "Save Changes"}</Button>
+            <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-2">
+              <Button variant="ghost" onClick={closeModal}>Cancel</Button>
+              <Button variant="gold" onClick={savePupil} loading={saving}>{modal.mode === "register" ? "Register pupil" : "Save changes"}</Button>
             </div>
           </div>
         )}

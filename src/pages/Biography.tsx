@@ -1,17 +1,19 @@
 import { useState, useEffect, useMemo, useRef } from "react";
+import { BookOpen, Eye, History, PenLine, Target, Upload, X } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { Card, Button, Textarea, Select, PageHeader, Modal } from "../components/ui";
-import { getDb, saveDb, genId, logActivity } from "../utils/db";
+import { toast } from "../components/feedback";
+import { getDb, saveDb, genId, logActivity, useDbVersion } from "../utils/db";
+import { readImage, IMAGE_SIZES } from "../utils/image";
 import type { GalleryItem, SchoolBiography } from "../types";
 
 export default function Biography() {
   const { user } = useAuth();
-  if (!user) return null;
-  const currentUser = user;
-  const isIT = currentUser.role === "headteacher" || currentUser.role === "deputy" || (currentUser.role === "hod" && currentUser.hodDepartment === "IT Department");
+  const currentUser = user!;
+  const isIT = currentUser?.role === "headteacher" || currentUser?.role === "deputy" || (currentUser?.role === "hod" && currentUser?.hodDepartment === "IT Department");
 
-  const [refreshKey, setRefreshKey] = useState(0);
-  const db = useMemo(() => getDb(), [refreshKey]);
+  const version = useDbVersion();
+  const db = useMemo(() => getDb(), [version]);
   const bio: SchoolBiography = db.biography || {
     id: "bio-default",
     aboutText: "",
@@ -39,15 +41,12 @@ export default function Biography() {
     return () => clearInterval(interval);
   }, [bio.gallery.length]);
 
-  function handleUploadImages(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleUploadImages(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files || []);
+    e.target.value = "";
     if (files.length === 0) return;
-    const promises = files.map((f) => new Promise<string>((resolve) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.readAsDataURL(f);
-    }));
-    Promise.all(promises).then((images) => {
+    try {
+      const images = await Promise.all(files.map((f) => readImage(f, IMAGE_SIZES.gallery, 0.8)));
       const newItems: GalleryItem[] = images.map((img) => ({
         id: genId("gal"),
         image: img,
@@ -55,7 +54,9 @@ export default function Biography() {
         caption: "",
       }));
       setForm((prev) => ({ ...prev, gallery: [...(prev.gallery || []), ...newItems] }));
-    });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Upload failed.");
+    }
   }
 
   function removeImage(id: string) {
@@ -79,7 +80,7 @@ export default function Biography() {
     saveDb(db2);
     logActivity(currentUser.id, currentUser.fullName, currentUser.role, "Updated school biography & gallery");
     setEditOpen(false);
-    setRefreshKey((k) => k + 1);
+    toast.success("School biography saved.");
   }
 
   function openEdit() {
@@ -94,16 +95,18 @@ export default function Biography() {
     flip: "animate-flipIn",
   };
 
+  if (!user) return null;
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <PageHeader
         title="About Yengwe Secondary School"
-        subtitle="School biography, mission, vision, and animated photo gallery (managed by IT Department)"
+        subtitle="Our story, mission and vision"
       >
-        {isIT && <Button variant="gold" onClick={openEdit}>✎ Edit Biography & Gallery</Button>}
+        {isIT && <Button variant="gold" onClick={openEdit}><PenLine className="w-4 h-4" />Edit page</Button>}
       </PageHeader>
 
-      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-emerald-800 via-emerald-700 to-emerald-900 text-white shadow-xl min-h-[380px] flex items-center">
+      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-emerald-800 via-emerald-700 to-emerald-900 text-white shadow-xl min-h-[260px] sm:min-h-[380px] flex items-center">
         {bio.gallery.length > 0 ? (
           <>
             {bio.gallery.map((g, i) => (
@@ -115,44 +118,46 @@ export default function Biography() {
                 <img src={g.image} alt={g.caption || ""} className="w-full h-full object-cover" />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
                 {g.caption && (
-                  <div className="absolute bottom-8 left-8 right-8 text-xl font-semibold drop-shadow-lg">{g.caption}</div>
+                  <div className="absolute bottom-10 left-5 right-5 sm:left-8 sm:right-8 text-lg sm:text-xl font-semibold drop-shadow-lg">{g.caption}</div>
                 )}
               </div>
             ))}
             <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-2 z-10">
               {bio.gallery.map((_, i) => (
-                <button key={i} onClick={() => setCurrentSlide(i)} className={`w-2 h-2 rounded-full transition-all ${i === currentSlide ? "bg-yellow-400 w-6" : "bg-white/60"}`} />
+                <button key={i} onClick={() => setCurrentSlide(i)} aria-label={`Show photo ${i + 1}`} aria-current={i === currentSlide} className={`h-2 rounded-full transition-all ${i === currentSlide ? "bg-yellow-400 w-6" : "bg-white/60 w-2 hover:bg-white"}`} />
               ))}
             </div>
           </>
         ) : (
-          <div className="w-full text-center py-20 px-6">
-            <div className="text-6xl mb-4">🏫</div>
-            <h2 className="text-3xl font-bold font-serif">YENGWE SECONDARY SCHOOL</h2>
-            <p className="italic text-yellow-300 mt-2 text-lg">Rise & Shine</p>
-            {isIT && <p className="mt-6 text-white/80 text-sm">IT Department can add an animated photo gallery by clicking "Edit Biography & Gallery".</p>}
+          <div className="w-full text-center py-16 px-6">
+            <div className="w-20 h-20 rounded-full bg-gradient-to-br from-emerald-700 to-emerald-900 border-4 border-yellow-500 flex items-center justify-center mx-auto mb-5 shadow-lg">
+              <span className="text-4xl font-serif font-bold text-yellow-400">Y</span>
+            </div>
+            <h2 className="text-2xl sm:text-3xl font-bold font-serif tracking-wide">YENGWE SECONDARY SCHOOL</h2>
+            <p className="italic text-yellow-300 mt-2 text-lg">Rise &amp; Shine</p>
+            {isIT && <p className="mt-6 text-white/75 text-sm">Add photos with “Edit page” to create an animated gallery here.</p>}
           </div>
         )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card>
-          <h3 className="font-bold text-emerald-800 mb-2 flex items-center gap-2"><span className="text-xl">📖</span> About Us</h3>
+          <h3 className="font-bold text-emerald-800 mb-2 flex items-center gap-2"><BookOpen className="w-5 h-5" /> About us</h3>
           <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{bio.aboutText || "No about text yet. The IT Department will add the school biography here."}</p>
         </Card>
         <Card>
-          <h3 className="font-bold text-emerald-800 mb-2 flex items-center gap-2"><span className="text-xl">🎯</span> Our Mission</h3>
+          <h3 className="font-bold text-emerald-800 mb-2 flex items-center gap-2"><Target className="w-5 h-5" /> Our mission</h3>
           <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{bio.mission || "Mission statement coming soon."}</p>
         </Card>
         <Card>
-          <h3 className="font-bold text-emerald-800 mb-2 flex items-center gap-2"><span className="text-xl">👁️</span> Our Vision</h3>
+          <h3 className="font-bold text-emerald-800 mb-2 flex items-center gap-2"><Eye className="w-5 h-5" /> Our vision</h3>
           <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{bio.vision || "Vision statement coming soon."}</p>
         </Card>
       </div>
 
       {bio.history && (
         <Card>
-          <h3 className="font-bold text-emerald-800 mb-2 flex items-center gap-2"><span className="text-xl">📜</span> Our History</h3>
+          <h3 className="font-bold text-emerald-800 mb-2 flex items-center gap-2"><History className="w-5 h-5" /> Our history</h3>
           <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{bio.history}</p>
         </Card>
       )}
@@ -177,7 +182,7 @@ export default function Biography() {
         </div>
       )}
 
-      <Modal open={editOpen} onClose={() => setEditOpen(false)} title="Edit School Biography & Gallery" size="xl">
+      <Modal open={editOpen} onClose={() => setEditOpen(false)} title="Edit school biography & gallery" size="xl">
         <div className="space-y-4">
           {!isIT ? <div className="p-3 rounded bg-red-50 border border-red-200 text-red-700 text-sm">You do not have permission to edit this page.</div> : (
             <>
@@ -196,15 +201,15 @@ export default function Biography() {
 
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <h4 className="font-semibold">Photo Gallery</h4>
-                  <Button variant="secondary" onClick={() => fileRef.current?.click()}>+ Upload Photos</Button>
+                  <h4 className="font-semibold text-gray-900">Photo gallery</h4>
+                  <Button variant="secondary" onClick={() => fileRef.current?.click()}><Upload className="w-4 h-4" />Upload photos</Button>
                   <input ref={fileRef} type="file" accept="image/*" multiple className="hidden" onChange={handleUploadImages} />
                 </div>
-                <div className="grid grid-cols-3 md:grid-cols-5 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
                   {(form.gallery || []).map((g) => (
-                    <div key={g.id} className="relative rounded border overflow-hidden aspect-square group">
+                    <div key={g.id} className="relative rounded-lg ring-1 ring-gray-200 overflow-hidden aspect-square group">
                       <img src={g.image} alt="" className="w-full h-full object-cover" />
-                      <button onClick={() => removeImage(g.id)} className="absolute top-1 right-1 bg-red-600 text-white rounded-full w-5 h-5 text-xs opacity-0 group-hover:opacity-100">×</button>
+                      <button onClick={() => removeImage(g.id)} aria-label="Remove photo" className="absolute top-1.5 right-1.5 bg-red-600 text-white rounded-full w-6 h-6 flex items-center justify-center shadow sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100 transition-opacity"><X className="w-3.5 h-3.5" /></button>
                       <input
                         type="text"
                         placeholder="Caption..."
@@ -218,9 +223,9 @@ export default function Biography() {
                 </div>
               </div>
 
-              <div className="flex justify-end gap-2 pt-4 border-t">
+              <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-4 border-t border-gray-100">
                 <Button variant="ghost" onClick={() => setEditOpen(false)}>Cancel</Button>
-                <Button variant="gold" onClick={saveBio}>Save Biography</Button>
+                <Button variant="gold" onClick={saveBio}>Save changes</Button>
               </div>
             </>
           )}

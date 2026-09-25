@@ -1,18 +1,21 @@
 import { useState, useMemo } from "react";
+import { CalendarDays, GraduationCap, Megaphone, Plus } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
-import { Card, Button, Input, Select, Modal, Textarea, Badge, PageHeader, EmptyState } from "../components/ui";
-import { getDb, saveDb, genId, logActivity } from "../utils/db";
+import { Card, Button, Input, Select, Modal, Textarea, Badge, PageHeader, EmptyState, Alert } from "../components/ui";
+import { toast, confirmDialog } from "../components/feedback";
+import { getDb, saveDb, genId, logActivity, useDbVersion } from "../utils/db";
 import type { Notice } from "../types";
+
+const CATEGORY = {
+  event: { label: "Event", color: "blue" as const, icon: CalendarDays },
+  academic: { label: "Academic", color: "emerald" as const, icon: GraduationCap },
+  general: { label: "General", color: "gray" as const, icon: Megaphone },
+};
 
 export default function Notices() {
   const { user } = useAuth();
-  if (!user) return null;
-  const currentUser = user;
-  const canPost = currentUser.role === "headteacher" || currentUser.role === "deputy";
-  const canEditDelete = currentUser.role === "headteacher";
-
-  const [refreshKey, setRefreshKey] = useState(0);
-  const db = useMemo(() => getDb(), [refreshKey]);
+  const version = useDbVersion();
+  const db = useMemo(() => getDb(), [version]);
   const [modal, setModal] = useState<{ open: boolean; notice: Notice | null; mode: "post" | "view" }>({ open: false, notice: null, mode: "view" });
   const [form, setForm] = useState<Partial<Notice>>({ category: "general" });
   const [error, setError] = useState("");
@@ -24,127 +27,124 @@ export default function Notices() {
     return list;
   }, [db, filter]);
 
+  if (!user) return null;
+  const currentUser = user;
+  const canPost = currentUser.role === "headteacher" || currentUser.role === "deputy";
+  const canDelete = currentUser.role === "headteacher";
+
   function openPost() {
     setForm({ title: "", content: "", category: "general", eventDate: "" });
     setModal({ open: true, notice: null, mode: "post" });
     setError("");
   }
-  function openView(n: Notice) {
-    setModal({ open: true, notice: n, mode: "view" });
-  }
 
   function saveNotice() {
     setError("");
-    if (!form.title || !form.content) { setError("Title and content required."); return; }
+    if (!form.title?.trim() || !form.content?.trim()) { setError("A title and content are required."); return; }
     const db2 = getDb();
     const n: Notice = {
-      id: genId("notice"),
-      title: form.title!,
-      content: form.content!,
-      category: (form.category as any) || "general",
-      eventDate: form.eventDate || undefined,
-      postedBy: currentUser.id,
-      postedByName: currentUser.fullName,
-      createdAt: new Date().toISOString(),
+      id: genId("notice"), title: form.title.trim(), content: form.content.trim(), category: form.category || "general",
+      eventDate: form.category === "event" ? form.eventDate || undefined : undefined,
+      postedBy: currentUser.id, postedByName: currentUser.fullName, createdAt: new Date().toISOString(),
     };
     db2.notices.push(n);
     saveDb(db2);
     logActivity(currentUser.id, currentUser.fullName, currentUser.role, `Posted notice: ${n.title}`, n.category);
     setModal({ open: false, notice: null, mode: "view" });
-    setRefreshKey((k) => k + 1);
+    toast.success("Notice posted to everyone.");
   }
 
-  function deleteNotice(n: Notice) {
-    if (!confirm(`Delete notice "${n.title}"?`)) return;
+  async function deleteNotice(n: Notice) {
+    if (!await confirmDialog({ title: "Delete notice?", message: `"${n.title}" will be removed from the notice board.`, confirmLabel: "Delete", danger: true })) return;
     const db2 = getDb();
     db2.notices = db2.notices.filter((x) => x.id !== n.id);
     saveDb(db2);
     logActivity(currentUser.id, currentUser.fullName, currentUser.role, `Deleted notice: ${n.title}`);
-    setRefreshKey((k) => k + 1);
+    setModal({ open: false, notice: null, mode: "view" });
+    toast.success("Notice deleted.");
   }
 
-  const categoryColors: Record<string, "blue" | "emerald" | "gray"> = {
-    event: "blue",
-    academic: "emerald",
-    general: "gray",
-  };
+  const filters: { id: string; label: string }[] = [{ id: "", label: "All" }, { id: "event", label: "Events" }, { id: "academic", label: "Academic" }, { id: "general", label: "General" }];
 
   return (
     <div>
-      <PageHeader title="Notice Board" subtitle="School announcements, events, and academic notices" >
-        {canPost && <Button variant="gold" onClick={openPost}>+ Post Notice</Button>}
+      <PageHeader title="Notice board" subtitle="School announcements, events and academic notices">
+        {canPost && <Button variant="gold" onClick={openPost}><Plus className="w-4 h-4" />Post notice</Button>}
       </PageHeader>
 
-      <Card className="mb-4">
-        <div className="flex gap-2 items-center flex-wrap">
-          <span className="text-sm font-medium text-gray-700">Filter:</span>
-          <button onClick={() => setFilter("")} className={`px-3 py-1 rounded-full text-xs font-medium ${!filter ? "bg-emerald-600 text-white" : "bg-gray-100 text-gray-700 hover:bg-gray-200"}`}>All</button>
-          <button onClick={() => setFilter("event")} className={`px-3 py-1 rounded-full text-xs font-medium ${filter === "event" ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-700 hover:bg-gray-200"}`}>📅 Events</button>
-          <button onClick={() => setFilter("academic")} className={`px-3 py-1 rounded-full text-xs font-medium ${filter === "academic" ? "bg-emerald-600 text-white" : "bg-gray-100 text-gray-700 hover:bg-gray-200"}`}>📚 Academic</button>
-          <button onClick={() => setFilter("general")} className={`px-3 py-1 rounded-full text-xs font-medium ${filter === "general" ? "bg-gray-700 text-white" : "bg-gray-100 text-gray-700 hover:bg-gray-200"}`}>📢 General</button>
-        </div>
-      </Card>
+      <div role="tablist" aria-label="Filter notices" className="flex gap-1.5 flex-wrap mb-4">
+        {filters.map((f) => (
+          <button key={f.id} role="tab" aria-selected={filter === f.id} onClick={() => setFilter(f.id)}
+            className={`px-3.5 py-1.5 rounded-full text-sm font-medium transition-colors ${filter === f.id ? "bg-emerald-700 text-white shadow-sm" : "bg-white text-gray-700 ring-1 ring-gray-200 hover:bg-gray-50"}`}>
+            {f.label}
+          </button>
+        ))}
+      </div>
 
       {notices.length === 0 ? (
-        <Card><EmptyState message="No notices yet." /></Card>
+        <Card><EmptyState icon={<Megaphone className="w-6 h-6" />} message={filter ? "No notices in this category." : "No notices have been posted yet."} /></Card>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {notices.map((n) => (
-            <Card key={n.id}>
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="font-semibold text-gray-900 text-lg">{n.title}</h3>
-                    <Badge color={categoryColors[n.category]} pulse={n.category === "event"}>
-                      {n.category === "event" ? "📅 Event" : n.category === "academic" ? "📚 Academic" : "📢 General"}
-                    </Badge>
+          {notices.map((n) => {
+            const cat = CATEGORY[n.category] || CATEGORY.general;
+            const Icon = cat.icon;
+            return (
+              <Card key={n.id} className="flex flex-col transition-shadow hover:shadow-md">
+                <div className="flex items-start gap-3">
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${n.category === "event" ? "bg-blue-50 text-blue-700" : n.category === "academic" ? "bg-emerald-50 text-emerald-700" : "bg-gray-100 text-gray-600"}`}>
+                    <Icon className="w-5 h-5" />
                   </div>
-                  <p className="text-sm text-gray-600 mt-2 whitespace-pre-wrap line-clamp-4">{n.content}</p>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-start justify-between gap-2">
+                      <h3 className="font-semibold text-gray-900 leading-snug">{n.title}</h3>
+                      <Badge color={cat.color} pulse={n.category === "event"}>{cat.label}</Badge>
+                    </div>
+                    <p className="text-sm text-gray-600 mt-2 whitespace-pre-wrap line-clamp-4">{n.content}</p>
+                  </div>
                 </div>
-              </div>
-              <div className="flex items-center justify-between mt-4 pt-3 border-t text-xs text-gray-500">
-                <div>
-                  <div><strong>Posted by:</strong> {n.postedByName}</div>
-                  <div><strong>Date:</strong> {new Date(n.createdAt).toLocaleDateString()}</div>
-                  {n.eventDate && <div><strong>Event Date:</strong> {new Date(n.eventDate).toLocaleDateString()}</div>}
+                <div className="flex items-center justify-between mt-4 pt-3 border-t border-gray-100 text-xs text-gray-500 gap-2">
+                  <div className="min-w-0">
+                    <div className="truncate">{n.postedByName} · {new Date(n.createdAt).toLocaleDateString()}</div>
+                    {n.eventDate && <div className="text-blue-700 font-medium">Event: {new Date(n.eventDate).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}</div>}
+                  </div>
+                  <div className="flex gap-1.5 flex-shrink-0">
+                    <Button variant="ghost" className="!py-1 !px-2.5 !text-xs" onClick={() => setModal({ open: true, notice: n, mode: "view" })}>Read more</Button>
+                    {canDelete && <Button variant="danger" className="!py-1 !px-2.5 !text-xs" onClick={() => deleteNotice(n)}>Delete</Button>}
+                  </div>
                 </div>
-                <div className="flex gap-2">
-                  <Button variant="ghost" className="!py-1 !px-2 !text-xs" onClick={() => openView(n)}>Read More</Button>
-                  {canEditDelete && <Button variant="danger" className="!py-1 !px-2 !text-xs" onClick={() => deleteNotice(n)}>Delete</Button>}
-                </div>
-              </div>
-            </Card>
-          ))}
+              </Card>
+            );
+          })}
         </div>
       )}
 
-      <Modal open={modal.open} onClose={() => setModal({ ...modal, open: false })} title={modal.notice ? modal.notice.title : "Post New Notice"} size="md">
+      <Modal open={modal.open} onClose={() => setModal({ ...modal, open: false })} title={modal.notice ? modal.notice.title : "Post new notice"} size="md">
         {modal.mode === "view" && modal.notice ? (
-          <div className="space-y-3">
-            <Badge color={categoryColors[modal.notice.category]}>{modal.notice.category}</Badge>
-            <p className="text-sm text-gray-800 whitespace-pre-wrap mt-2">{modal.notice.content}</p>
-            <div className="grid grid-cols-2 gap-2 text-xs pt-3 border-t">
-              <div><strong>Posted by:</strong> {modal.notice.postedByName}</div>
-              <div><strong>Posted on:</strong> {new Date(modal.notice.createdAt).toLocaleString()}</div>
-              {modal.notice.eventDate && <div className="col-span-2"><strong>Event Date:</strong> {new Date(modal.notice.eventDate).toLocaleDateString()}</div>}
-            </div>
+          <div className="space-y-4">
+            <Badge color={(CATEGORY[modal.notice.category] || CATEGORY.general).color}>{(CATEGORY[modal.notice.category] || CATEGORY.general).label}</Badge>
+            <p className="text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">{modal.notice.content}</p>
+            <dl className="grid grid-cols-2 gap-3 text-xs pt-3 border-t border-gray-100">
+              <div><dt className="text-gray-500">Posted by</dt><dd className="font-medium text-gray-900">{modal.notice.postedByName}</dd></div>
+              <div><dt className="text-gray-500">Posted on</dt><dd className="font-medium text-gray-900">{new Date(modal.notice.createdAt).toLocaleString()}</dd></div>
+              {modal.notice.eventDate && <div className="col-span-2"><dt className="text-gray-500">Event date</dt><dd className="font-medium text-gray-900">{new Date(modal.notice.eventDate).toLocaleDateString(undefined, { dateStyle: "full" })}</dd></div>}
+            </dl>
           </div>
         ) : (
-          <div className="space-y-3">
-            {error && <div className="p-2 rounded bg-red-50 border border-red-200 text-red-700 text-sm">{error}</div>}
-            <Input label="Notice Title" value={form.title || ""} onChange={(e) => setForm({ ...form, title: e.target.value })} />
-            <Select label="Category" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value as any })}>
-              <option value="general">📢 General</option>
-              <option value="event">📅 Event</option>
-              <option value="academic">📚 Academic</option>
+          <div className="space-y-4">
+            {error && <Alert tone="error">{error}</Alert>}
+            <Input label="Title" value={form.title || ""} onChange={(e) => setForm({ ...form, title: e.target.value })} autoFocus />
+            <Select label="Category" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value as Notice["category"] })}>
+              <option value="general">General</option>
+              <option value="event">Event</option>
+              <option value="academic">Academic</option>
             </Select>
             {form.category === "event" && (
-              <Input label="Event Date" type="date" value={form.eventDate || ""} onChange={(e) => setForm({ ...form, eventDate: e.target.value })} />
+              <Input label="Event date" type="date" value={form.eventDate || ""} onChange={(e) => setForm({ ...form, eventDate: e.target.value })} />
             )}
             <Textarea label="Content" rows={6} value={form.content || ""} onChange={(e) => setForm({ ...form, content: e.target.value })} />
-            <div className="flex justify-end gap-2 pt-2">
+            <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setModal({ ...modal, open: false })}>Cancel</Button>
-              <Button variant="gold" onClick={saveNotice}>Post Notice</Button>
+              <Button variant="gold" onClick={saveNotice}>Post notice</Button>
             </div>
           </div>
         )}
