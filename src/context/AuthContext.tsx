@@ -88,7 +88,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { data, error } = await supabase.auth.signInWithPassword({ email: authEmail(username), password });
     if (error || !data.user) {
       const offline = /fetch|network/i.test(error?.message || "");
-      return { success: false, message: offline ? "Can't reach the server. Check your internet connection." : "Incorrect username or password." };
+      return { success: false, message: offline ? "Can't reach the server. Check your internet connection." : "Incorrect username, email or password." };
     }
     setStatus("loading");
     await startSession(data.user.id);
@@ -124,7 +124,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (newPassword.length < MIN_PASSWORD_LENGTH) return { success: false, message: `New password must be at least ${MIN_PASSWORD_LENGTH} characters.` };
     if (newPassword === currentPassword) return { success: false, message: "Choose a password different from your current one." };
     // Confirm the current password before changing it.
-    const check = await supabase.auth.signInWithPassword({ email: authEmail(user.username), password: currentPassword });
+    const { data: session } = await supabase.auth.getUser();
+    const email = session.user?.email || authEmail(user.username);
+    const check = await supabase.auth.signInWithPassword({ email, password: currentPassword });
     if (check.error) return { success: false, message: "Current password is incorrect." };
     const { error } = await supabase.auth.updateUser({ password: newPassword });
     if (error) return { success: false, message: error.message };

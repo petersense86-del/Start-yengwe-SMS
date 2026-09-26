@@ -10,11 +10,13 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, storageKey: "ypms-auth" },
 });
 
-// Accounts use a username; Supabase Auth needs an email-shaped identifier.
+// Accounts created in the app sign in with a username, which maps to an
+// email-shaped identifier. Anything containing "@" is used as a real email.
 // Must match EMAIL_DOMAIN in supabase/functions/admin-users/index.ts.
 const EMAIL_DOMAIN = "ypms.local";
-export function authEmail(username: string) {
-  return `${username.trim().toLowerCase()}@${EMAIL_DOMAIN}`;
+export function authEmail(login: string) {
+  const value = login.trim().toLowerCase();
+  return value.includes("@") ? value : `${value}@${EMAIL_DOMAIN}`;
 }
 
 type AdminAction =

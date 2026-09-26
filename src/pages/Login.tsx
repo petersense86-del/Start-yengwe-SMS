@@ -132,7 +132,7 @@ export default function Login() {
 
           {mode === "login" && (
             <form onSubmit={handleLogin} className="space-y-4" noValidate>
-              <Input label="Username" type="text" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="e.g. mbanda" autoComplete="username" autoCapitalize="none" spellCheck={false} required autoFocus />
+              <Input label="Username or email" type="text" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="e.g. mbanda" autoComplete="username" autoCapitalize="none" spellCheck={false} required autoFocus />
               <PasswordInput label="Password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Enter your password" autoComplete="current-password" required />
               {error && <Alert tone="error">{error}</Alert>}
               <Button type="submit" className="w-full py-2.5" loading={loading} disabled={!username || !password}>{loading ? "Signing in…" : "Sign in"}</Button>
