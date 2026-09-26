@@ -35,7 +35,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
     if (!findUser(id)) {
-      await supabase.auth.signOut();
+      await supabase.auth.signOut({ scope: "local" });
       resetDb();
       setStatus("signedOut");
       return;
@@ -106,7 +106,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function logout() {
     if (user) logActivity(user.id, user.fullName, user.role, "Logged out");
-    await supabase.auth.signOut();
+    // Only end this browser's session; other devices stay signed in.
+    await supabase.auth.signOut({ scope: "local" });
   }
 
   function updateUser(updates: Partial<User>) {
