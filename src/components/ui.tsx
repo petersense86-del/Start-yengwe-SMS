@@ -100,23 +100,29 @@ export function Card({ children, className }: { children: ReactNode; className?:
 export function Modal({ open, onClose, title, children, size = "md" }: { open: boolean; onClose: () => void; title: string; children: ReactNode; size?: "sm" | "md" | "lg" | "xl" }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
+  // Callers pass a new onClose on every render; keep the latest in a ref so
+  // typing inside the modal doesn't re-run the open/close effect (which would
+  // steal focus from the input after every keystroke).
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!open) return;
     function handleEsc(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") onCloseRef.current();
     }
     document.addEventListener("keydown", handleEsc);
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const previouslyFocused = document.activeElement as HTMLElement | null;
-    panelRef.current?.focus();
+    // Respect an autoFocus field inside the modal; otherwise focus the panel.
+    if (!panelRef.current?.contains(document.activeElement)) panelRef.current?.focus();
     return () => {
       document.removeEventListener("keydown", handleEsc);
       document.body.style.overflow = prevOverflow;
       previouslyFocused?.focus?.();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
   const sizeCls = { sm: "sm:max-w-md", md: "sm:max-w-2xl", lg: "sm:max-w-4xl", xl: "sm:max-w-6xl" }[size];
