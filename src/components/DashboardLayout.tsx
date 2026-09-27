@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Loader2, LogOut, Megaphone, Menu, MessageSquare, Settings, UserRound, Users, X, type LucideIcon,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
-import { getDb, useDbVersion, useSyncStatus } from "../utils/db";
+import { peekDb, useDbVersion, useSyncStatus } from "../utils/db";
 import { Avatar } from "./ui";
 import type { Role } from "../data/constants";
 
@@ -64,7 +64,7 @@ export default function DashboardLayout({ children, activeTab, setActiveTab, tit
   }, [mobileOpen]);
 
   if (!user) return null;
-  const db = getDb();
+  const db = peekDb();
   const logo = db.settings.schoolLogo;
   const allowedNav = NAV_ITEMS.filter((n) => n.roles.includes(user.role));
   const unreadMessages = db.messages.filter((m) => m.toId === user.id && !m.read && m.kind === "message").length;

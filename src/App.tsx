@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Lock } from "lucide-react";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import Login from "./pages/Login";
@@ -6,17 +6,35 @@ import ForcePasswordChange from "./pages/ForcePasswordChange";
 import DashboardLayout from "./components/DashboardLayout";
 import { FeedbackHost, toast } from "./components/feedback";
 import { Spinner } from "./components/ui";
-import { onSyncError, refreshData } from "./utils/db";
-import Overview from "./pages/Overview";
-import Profile from "./pages/Profile";
-import Pupils from "./pages/Pupils";
-import Teachers from "./pages/Teachers";
-import Results from "./pages/Results";
-import Homework from "./pages/Homework";
-import Notices from "./pages/Notices";
-import { DownloadLogs, ActivityLogs, SystemUpdates, SettingsPage } from "./pages/AdminPages";
-import Biography from "./pages/Biography";
-import Messages from "./pages/Messages";
+import { onSyncError, refreshIfStale } from "./utils/db";
+
+// Each page is downloaded the first time it is opened, keeping the first load small.
+const Overview = lazy(() => import("./pages/Overview"));
+const Profile = lazy(() => import("./pages/Profile"));
+const Pupils = lazy(() => import("./pages/Pupils"));
+const Teachers = lazy(() => import("./pages/Teachers"));
+const Results = lazy(() => import("./pages/Results"));
+const Homework = lazy(() => import("./pages/Homework"));
+const Notices = lazy(() => import("./pages/Notices"));
+const Biography = lazy(() => import("./pages/Biography"));
+const Messages = lazy(() => import("./pages/Messages"));
+const DownloadLogs = lazy(() => import("./pages/AdminPages").then((m) => ({ default: m.DownloadLogs })));
+const ActivityLogs = lazy(() => import("./pages/AdminPages").then((m) => ({ default: m.ActivityLogs })));
+const SystemUpdates = lazy(() => import("./pages/AdminPages").then((m) => ({ default: m.SystemUpdates })));
+const SettingsPage = lazy(() => import("./pages/AdminPages").then((m) => ({ default: m.SettingsPage })));
+
+// After sign-in, fetch the common pages' code in the background so opening them feels instant.
+function preloadPages() {
+  const load = () => {
+    import("./pages/Results");
+    import("./pages/Notices");
+    import("./pages/Homework");
+    import("./pages/Messages");
+    import("./pages/Profile");
+  };
+  if ("requestIdleCallback" in window) window.requestIdleCallback(load);
+  else setTimeout(load, 2000);
+}
 
 const TITLES: Record<string, string> = {
   overview: "Dashboard",
@@ -42,13 +60,15 @@ function Dashboard() {
     document.title = `${TITLES[activeTab] || "Dashboard"} · YPMS`;
   }, [activeTab]);
 
+  useEffect(preloadPages, []);
+
   if (!user) return null;
 
   function changeTab(tab: string) {
     setActiveTab(tab);
     window.scrollTo({ top: 0 });
-    // Pick up changes made on other devices.
-    refreshData().catch(() => undefined);
+    // Pick up changes made on other devices, at most every 30 seconds.
+    refreshIfStale(30_000).catch(() => undefined);
   }
 
   function renderContent() {
@@ -82,7 +102,9 @@ function Dashboard() {
 
   return (
     <DashboardLayout activeTab={activeTab} setActiveTab={changeTab} title={TITLES[activeTab] || "Dashboard"}>
-      <div key={activeTab} className="animate-pageIn">{renderContent()}</div>
+      <Suspense fallback={<div className="flex justify-center py-20"><Spinner className="text-emerald-700" /></div>}>
+        <div key={activeTab} className="animate-pageIn">{renderContent()}</div>
+      </Suspense>
     </DashboardLayout>
   );
 }

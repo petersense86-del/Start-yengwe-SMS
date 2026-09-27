@@ -7,7 +7,6 @@ import { getDb, saveDb, genId, logActivity, useDbVersion } from "../utils/db";
 import { JUNIOR_SUBJECTS, SENIOR_SUBJECTS, GRADES, getPerformanceColor } from "../data/constants";
 import type { User, Result, SubjectScore } from "../types";
 import { yengweGrade, YENGWE_GRADES } from "../types";
-import { generateResultPDF } from "../utils/pdf";
 
 const THIS_YEAR = new Date().getFullYear();
 const YEARS = Array.from({ length: THIS_YEAR - 2015 + 2 }, (_, i) => THIS_YEAR + 1 - i);
@@ -231,10 +230,12 @@ export default function Results() {
     setModal({ open: true, result: r, pupil: p || null, mode: "view" });
   }
 
-  function downloadPDF(r: Result) {
+  async function downloadPDF(r: Result) {
     const p = db.users.find((u) => u.id === r.pupilId) || (r.pupilId === currentUser.id ? currentUser : undefined);
     if (!p) return;
     try {
+      // The PDF library is large, so it is only downloaded when first needed.
+      const { generateResultPDF } = await import("../utils/pdf");
       generateResultPDF(r, p, currentUser, db.settings);
     } catch {
       toast.error("Could not generate the PDF. Please try again.");

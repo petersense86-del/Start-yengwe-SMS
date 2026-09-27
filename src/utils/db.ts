@@ -239,6 +239,11 @@ export function getDb(): Database {
   return copy;
 }
 
+/** The live cache, read-only and without copying. Use for display only; never mutate or pass to saveDb. */
+export function peekDb(): Readonly<Database> {
+  return cache;
+}
+
 /** Persist every difference between `db` and the last known server state. */
 export function saveDb(db: Database): void {
   const seenVersions = cloneVersions.get(db);
@@ -408,14 +413,25 @@ async function loadCollections(collections: CollectionKey[] = ALL_COLLECTIONS) {
   bump();
 }
 
+let lastFullRefresh = 0;
+
 /** Load (or reload) everything for the signed-in user, after pending writes finish. */
 export async function refreshData(collections?: CollectionKey[]): Promise<void> {
   await flushWrites();
+  const startedAt = Date.now();
   await loadCollections(collections);
+  if (!collections) lastFullRefresh = startedAt;
+}
+
+/** Reload everything only if the last full reload is older than `maxAgeMs`. */
+export function refreshIfStale(maxAgeMs: number): Promise<void> {
+  if (Date.now() - lastFullRefresh < maxAgeMs) return Promise.resolve();
+  return refreshData();
 }
 
 /** Forget all cached data (on sign-out). */
 export function resetDb(): void {
+  lastFullRefresh = 0;
   cache = emptyDb();
   snapshot.clear();
   bump();

@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { User } from "../types";
 import { supabase, authEmail } from "../lib/supabase";
-import { getDb, saveDb, logActivity, refreshData, resetDb, findUser, useDbVersion } from "../utils/db";
+import { getDb, saveDb, logActivity, refreshData, refreshIfStale, resetDb, findUser, useDbVersion } from "../utils/db";
 
 type AuthStatus = "loading" | "signedOut" | "ready";
 
@@ -74,7 +74,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "messages" }, () => refreshSoon(["messages"]))
       .subscribe();
     const interval = window.setInterval(() => refreshSoon(), 90_000);
-    const onFocus = () => { if (document.visibilityState === "visible") refreshSoon(); };
+    const onFocus = () => { if (document.visibilityState === "visible") refreshIfStale(30_000).catch(() => undefined); };
     document.addEventListener("visibilitychange", onFocus);
     return () => {
       window.clearTimeout(timer);
