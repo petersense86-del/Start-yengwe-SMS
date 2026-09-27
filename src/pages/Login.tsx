@@ -7,6 +7,36 @@ import { toast } from "../components/feedback";
 
 interface Branding { schoolLogo?: string; schoolMotto?: string; hasHeadteacher: boolean }
 
+const BACKGROUND_PHOTOS = [
+  { src: "/login/pupils.jpg", position: "center" },
+  { src: "/login/campus.jpg", position: "center" },
+  { src: "/login/graduation.jpg", position: "center 20%" },
+];
+const PHOTO_INTERVAL_MS = 6000;
+
+function PhotoBackground() {
+  const [current, setCurrent] = useState(0);
+
+  useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const timer = setInterval(() => setCurrent((i) => (i + 1) % BACKGROUND_PHOTOS.length), PHOTO_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="absolute inset-0" aria-hidden="true">
+      {BACKGROUND_PHOTOS.map((photo, i) => (
+        <div
+          key={photo.src}
+          className={`absolute inset-0 bg-cover transition-opacity duration-[1500ms] ease-in-out ${i === current ? "opacity-100" : "opacity-0"}`}
+          style={{ backgroundImage: `url(${photo.src})`, backgroundPosition: photo.position }}
+        />
+      ))}
+      <div className="absolute inset-0 bg-gradient-to-br from-emerald-950/80 via-emerald-900/65 to-emerald-950/85" />
+    </div>
+  );
+}
+
 function LogoHeader({ logo, motto }: { logo?: string; motto?: string }) {
   return (
     <div className="flex flex-col items-center mb-6">
@@ -114,8 +144,8 @@ export default function Login() {
 
   return (
     <div className="min-h-screen relative flex items-center justify-center p-4 overflow-x-hidden">
-      <div className="absolute inset-0 bg-gradient-to-br from-emerald-900 via-emerald-800 to-emerald-950" />
-      <div className="absolute inset-0 opacity-20" style={{ backgroundImage: "radial-gradient(circle at 25% 25%, rgba(212,175,55,0.3) 0%, transparent 50%), radial-gradient(circle at 75% 75%, rgba(212,175,55,0.2) 0%, transparent 50%)" }} />
+      <div className="absolute inset-0 bg-emerald-950" />
+      <PhotoBackground />
 
       <div className="relative w-full max-w-md animate-modalIn">
         <div className="bg-white rounded-2xl shadow-2xl p-6 sm:p-8 border-t-4 border-yellow-500">
